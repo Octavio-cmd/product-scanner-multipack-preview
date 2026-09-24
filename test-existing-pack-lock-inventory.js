@@ -84,6 +84,7 @@ PsURL.revokeObjectURL = () => {};
 let sbConfig = { products: [] };
 let ebConfig = { mode: 'ok', listings: [] };   // ok | http502 | http503 | network
 let sbCalls = [], ebCalls = [], otherCalls = [];
+let invWritten = {};   // #21D: what the mocked Sellbrite holds after a write
 function jsonRes(status, body) { return { ok: status >= 200 && status < 300, status: status, json: async () => JSON.parse(JSON.stringify(body)) }; }
 function sbResponse() {
   if (!sbConfig.products.length) return jsonRes(404, { status: 'not_found', products: [] });
@@ -113,7 +114,18 @@ const sandbox = {
       if (invConfig.mode === 'http409') return jsonRes(409, { status: 'error', error: 'current_quantity_unavailable', message: 'No se pudo leer la cantidad actual en Sellbrite; no se sumó nada.' });
       const prev = invConfig.current;
       const avail = body.mode === 'add' ? prev + body.quantity : body.quantity;
+      invWritten[body.sku] = avail;
       return jsonRes(200, { status: 'success', sku: body.sku, available: avail, previous_available: prev, mode: body.mode });
+    }
+    // #21C: /sb/inventory?sku= (read-only) answers from the same fixture
+    // products — one warehouse, available = the fixture quantity.
+    if (u.indexOf('/sb/inventory') >= 0) {
+      const sku = decodeURIComponent((u.match(/sku=([^&]+)/) || [])[1] || '');
+      const p = sbConfig.products.find(x => x.sku === sku);
+      if (!p) return jsonRes(200, { status: 'success', sku, inventory: { total_quantity: 0, total_on_hand: 0, channels: [], warehouses: [], found: false } });
+      const q = (sku in invWritten) ? invWritten[sku] : p.inventory.total_quantity;   // #21D: reflects the last write
+      const ch = [{ warehouse_uuid: 'wh-1', warehouse_name: 'Main', available: q, on_hand: q, bin_location: '' }];
+      return jsonRes(200, { status: 'success', sku, inventory: { total_quantity: q, total_on_hand: q, channels: ch, warehouses: ch, found: true } });
     }
     otherCalls.push({ u, method });
     if (u.indexOf('/ss/location') >= 0) {
@@ -193,7 +205,7 @@ const results = () => getEl('split-results').innerHTML;
 function resetAll() {
   setRTF(null, null); setBulk([]);
   sbConfig = { products: [] }; ebConfig = { mode: 'ok', listings: [] }; invConfig = { mode: 'ok', current: 4 };
-  sbCalls = []; ebCalls = []; otherCalls = []; invCalls = []; capturedBlobs = [];
+  sbCalls = []; ebCalls = []; otherCalls = []; invCalls = []; capturedBlobs = []; invWritten = {};
   storage.removeItem('ps_locked_packs_v1'); storage.removeItem('cl_drive_url');
   vm.runInContext("window._psLockedPacks = null; window._psSbState = {upc:'',state:'idle'}; window._psEbSeller = {upc:'',state:'idle',listings:[],error:''}; window._psEbExisting = {}; window._psSbExistingListings = []; window._psSbExisting = {}; _psSellbriteProducts = {};", sandbox);
   getEl('split-calc-card').dataset.tier = 'media';
@@ -211,6 +223,17 @@ async function scan(upc, brand, sbProducts, eb, opts) {
   if (typeof eb === 'string') ebConfig.mode = eb; else ebConfig.listings = eb || [];
   if (opts.sbFail) sbConfig.defer = async () => jsonRes(500, { error: 'boom' }); else sbConfig.defer = null;
   await Promise.all([sandbox.psCheckSellbrite(upc, brand), sandbox.psCheckEbaySellerListings(upc, brand, '')]);
+  await settleInventory();
+}
+// #21C: the per-SKU /sb/inventory reads run after /sb/search; wait for them
+// and re-render the split so results() reflects the confirmed quantities.
+async function settleInventory() {
+  for (let n = 0; n < 50; n++) {
+    const inv = vm.runInContext('window._psSbInv || {}', sandbox);
+    if (!Object.values(inv).some(a => a && a.state === 'loading')) break;
+    await new Promise(r => setImmediate(r));
+  }
+  try { sandbox.updateSplitCalc(); } catch (e) {}
 }
 async function captureExport() {
   const toasts = [], alerts = [];
@@ -402,7 +425,9 @@ await scan(IRW, 'Irwin Naturals', [sbProd('IRW-710363598525-2', 4)], []);
 {
   const i = st(2).sellbrite[0].idx;
   checkTrue('pack card input value="0"', results().includes('id="ps-pack-sbqty-' + i + '" type="number" inputmode="numeric" value="0"'));
-  checkTrue('Sellbrite status card input also value="0" (never on-hand 4)', getEl('ps-sellbrite-status').innerHTML.includes('id="ps-sbqty-' + i + '" type="number" inputmode="numeric" value="0"'));
+  // #21D: one inventory authority — a SKU with a 🔒 pack card has its
+  // controls ONLY there; the Sellbrite status card just points to it.
+  checkTrue('Sellbrite status card has no duplicate inventory input (#21D)', !getEl('ps-sellbrite-status').innerHTML.includes('id="ps-sbqty-' + i + '"') && getEl('ps-sellbrite-status').innerHTML.includes('usa la tarjeta 🔒 YA LISTADO'));
 }
 
 section('23 — SUMAR calls the existing endpoint with mode=add');
