@@ -469,6 +469,274 @@ let _tt;
 function toast(msg,ms=2600){const t=$('toast');t.textContent=msg;t.classList.add('on');clearTimeout(_tt);_tt=setTimeout(()=>t.classList.remove('on'),ms);}
 function stat(m){const e=$('ls');if(e)e.textContent=m;}
 
+// ════════════════════════════════════════════════════════════════════════════════════
+// 🔍 TEMPORARY IMAGE PIPELINE DEBUG SYSTEM (Preview Only)
+// Diagnostic instrumentation activated via ?imageDebug=1 query parameter
+// Observational only — does NOT alter image processing behavior
+// ════════════════════════════════════════════════════════════════════════════════════
+
+const _psImageDebug = {
+  enabled: (new URLSearchParams(window.location.search)).get('imageDebug') === '1',
+  stages: {
+    stage1_original: null,      // STAGE 1: Original source metadata
+    stage2_rembg: null,         // STAGE 2: rembg response + alpha analysis
+    stage3_bounds: null,        // STAGE 3: Visible bounds detection results
+    stage4_cropped: null,       // STAGE 4: Cropped/padded cutout
+    stage5_canvas: null         // STAGE 5: Final multipack canvas
+  },
+  blobs: {                       // For visual inspection
+    original: null,              // Original source image blob/URL
+    rembg_output: null,         // Raw rembg output blob/URL
+    bounds_overlay: null,       // Bounds rectangle overlay
+    cropped_cutout: null,       // Cropped region
+    final_canvas: null          // Final canvas output
+  },
+  errors: []
+};
+
+function _psDebugLog(stage, data) {
+  if (!_psImageDebug.enabled) return;
+  console.log(`[IMAGE-DEBUG] ${stage}:`, data);
+}
+
+function _psDebugStage1Original(file, naturalWidth, naturalHeight, mimeType) {
+  if (!_psImageDebug.enabled) return;
+  try {
+    _psImageDebug.stages.stage1_original = {
+      timestamp: new Date().toISOString(),
+      fileName: file.name || '(unknown)',
+      fileSize: file.size,
+      fileMimeType: file.type,
+      detectedMimeType: mimeType,
+      naturalWidth: naturalWidth,
+      naturalHeight: naturalHeight,
+      aspectRatio: naturalWidth / naturalHeight,
+      metadata: {
+        desc: 'Original source image from device camera/gallery/file picker'
+      }
+    };
+    _psDebugLog('STAGE 1 - ORIGINAL SOURCE', _psImageDebug.stages.stage1_original);
+  } catch(e) {
+    _psImageDebug.errors.push('Stage 1 error: ' + e.message);
+  }
+}
+
+function _psDebugStage2Rembg(response, blob, width, height, hasAlpha, alphaStats) {
+  if (!_psImageDebug.enabled) return;
+  try {
+    _psImageDebug.stages.stage2_rembg = {
+      timestamp: new Date().toISOString(),
+      httpStatus: response.status,
+      httpContentType: response.headers.get('content-type'),
+      blobMimeType: blob.type,
+      blobSize: blob.size,
+      detectedFormat: blob.type.includes('jpeg') ? 'JPEG' : 'PNG',
+      imageWidth: width,
+      imageHeight: height,
+      hasAlpha: hasAlpha,
+      alphaStats: alphaStats || {},
+      metadata: {
+        desc: 'rembg API response (background removal service)'
+      }
+    };
+    _psImageDebug.blobs.rembg_output = blob;
+    _psDebugLog('STAGE 2 - REMBG RESPONSE', _psImageDebug.stages.stage2_rembg);
+  } catch(e) {
+    _psImageDebug.errors.push('Stage 2 error: ' + e.message);
+  }
+}
+
+function _psDebugStage3Bounds(img, bounds) {
+  if (!_psImageDebug.enabled) return;
+  try {
+    const originalArea = img.width * img.height;
+    const boundsArea = bounds.width * bounds.height;
+    const retainedPercent = (boundsArea / originalArea) * 100;
+
+    _psImageDebug.stages.stage3_bounds = {
+      timestamp: new Date().toISOString(),
+      sourceWidth: img.width,
+      sourceHeight: img.height,
+      sourceAspectRatio: img.width / img.height,
+      detectedBoundsLeft: bounds.left,
+      detectedBoundsTop: bounds.top,
+      detectedBoundsRight: bounds.left + bounds.width - 1,
+      detectedBoundsBottom: bounds.top + bounds.height - 1,
+      boundsWidth: bounds.width,
+      boundsHeight: bounds.height,
+      boundsAspectRatio: bounds.aspect,
+      retainedPercentOfOriginal: retainedPercent.toFixed(1),
+      transparencyDetected: bounds.hasTransparency,
+      fallbackToFullImage: bounds.usedFallback,
+      fallbackReason: bounds.usedFallback ? (bounds.error || 'No transparency detected') : 'Normal detection',
+      paddingPercentages: bounds.padding || {},
+      metadata: {
+        desc: 'Visible bounds detection using alpha-channel scan'
+      }
+    };
+    _psDebugLog('STAGE 3 - VISIBLE BOUNDS', _psImageDebug.stages.stage3_bounds);
+  } catch(e) {
+    _psImageDebug.errors.push('Stage 3 error: ' + e.message);
+  }
+}
+
+function _psDebugStage4CroppedCutout(croppedWidth, croppedHeight, cropX, cropY, padding, hasTransparency) {
+  if (!_psImageDebug.enabled) return;
+  try {
+    _psImageDebug.stages.stage4_cropped = {
+      timestamp: new Date().toISOString(),
+      outputWidth: croppedWidth,
+      outputHeight: croppedHeight,
+      cropStartX: cropX,
+      cropStartY: cropY,
+      paddingApplied: padding,
+      transparencyPreserved: hasTransparency,
+      metadata: {
+        desc: 'Cropped and padded cutout region'
+      }
+    };
+    _psDebugLog('STAGE 4 - CROPPED CUTOUT', _psImageDebug.stages.stage4_cropped);
+  } catch(e) {
+    _psImageDebug.errors.push('Stage 4 error: ' + e.message);
+  }
+}
+
+function _psDebugStage5Canvas(canvasWidth, canvasHeight, objectW, objectH, scaleX, scaleY, posX, posY, clipping, format, quality) {
+  if (!_psImageDebug.enabled) return;
+  try {
+    _psImageDebug.stages.stage5_canvas = {
+      timestamp: new Date().toISOString(),
+      canvasWidth: canvasWidth,
+      canvasHeight: canvasHeight,
+      objectOriginalWidth: objectW,
+      objectOriginalHeight: objectH,
+      scaleFactor: scaleX || scaleY,
+      scaleFactorX: scaleX,
+      scaleFactorY: scaleY,
+      positionX: posX,
+      positionY: posY,
+      clippingDetected: clipping,
+      outputFormat: format,
+      jpegQuality: quality,
+      metadata: {
+        desc: 'Final multipack canvas composition'
+      }
+    };
+    _psDebugLog('STAGE 5 - CANVAS COMPOSITION', _psImageDebug.stages.stage5_canvas);
+  } catch(e) {
+    _psImageDebug.errors.push('Stage 5 error: ' + e.message);
+  }
+}
+
+// Show debug panel with all captured data
+function _psShowImageDebugPanel() {
+  if (!_psImageDebug.enabled) {
+    toast('🔍 Debug mode not enabled. Use ?imageDebug=1');
+    return;
+  }
+
+  let html = '<div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.95);z-index:999999;overflow-y:auto;padding:20px;font-family:monospace;font-size:12px;color:#0f0">';
+  html += '<button onclick="this.parentElement.parentElement.remove()" style="position:sticky;top:0;width:100%;padding:10px;background:#c0392b;color:#fff;border:none;margin-bottom:10px">✕ Close Debug Panel</button>';
+
+  html += '<div style="background:#1a1a1a;padding:15px;margin:10px 0;border-radius:8px">';
+  html += '<h2 style="color:#00ff00;margin-top:0">📊 IMAGE PIPELINE DEBUG DATA</h2>';
+
+  // Stage 1
+  if (_psImageDebug.stages.stage1_original) {
+    const s1 = _psImageDebug.stages.stage1_original;
+    html += '<div style="background:#0a0a0a;padding:10px;margin:10px 0;border-left:3px solid #ffaa00">';
+    html += '<strong>📸 STAGE 1: ORIGINAL SOURCE</strong><br>';
+    html += `File: ${s1.fileName} (${(s1.fileSize/1024).toFixed(1)} KB)<br>`;
+    html += `Dimensions: ${s1.naturalWidth} × ${s1.naturalHeight} px<br>`;
+    html += `Aspect Ratio: ${s1.aspectRatio.toFixed(3)}<br>`;
+    html += `MIME Type: ${s1.fileMimeType}<br>`;
+    html += '</div>';
+  }
+
+  // Stage 2
+  if (_psImageDebug.stages.stage2_rembg) {
+    const s2 = _psImageDebug.stages.stage2_rembg;
+    html += '<div style="background:#0a0a0a;padding:10px;margin:10px 0;border-left:3px solid #ffaa00">';
+    html += '<strong>🌐 STAGE 2: REMBG RESPONSE</strong><br>';
+    html += `HTTP Status: ${s2.httpStatus}<br>`;
+    html += `Response MIME: ${s2.httpContentType}<br>`;
+    html += `Blob MIME: ${s2.blobMimeType} (${s2.detectedFormat})<br>`;
+    html += `Blob Size: ${(s2.blobSize/1024).toFixed(1)} KB<br>`;
+    html += `Output Dimensions: ${s2.imageWidth} × ${s2.imageHeight} px<br>`;
+    html += `Has Alpha Channel: ${s2.hasAlpha ? '✅ YES' : '❌ NO'}<br>`;
+    if (s2.alphaStats && s2.alphaStats.transparentPercent !== undefined) {
+      html += `Transparent Pixels: ${s2.alphaStats.transparentPercent.toFixed(1)}%<br>`;
+      html += `Alpha Min: ${s2.alphaStats.alphaMin}, Max: ${s2.alphaStats.alphaMax}<br>`;
+    }
+    html += '</div>';
+  }
+
+  // Stage 3
+  if (_psImageDebug.stages.stage3_bounds) {
+    const s3 = _psImageDebug.stages.stage3_bounds;
+    html += '<div style="background:#0a0a0a;padding:10px;margin:10px 0;border-left:3px solid #ffaa00">';
+    html += '<strong>📏 STAGE 3: VISIBLE BOUNDS</strong><br>';
+    html += `Source: ${s3.sourceWidth} × ${s3.sourceHeight} px (${s3.sourceAspectRatio.toFixed(3)} aspect)<br>`;
+    html += `Bounds: [${s3.detectedBoundsLeft}, ${s3.detectedBoundsTop}] → [${s3.detectedBoundsRight}, ${s3.detectedBoundsBottom}]<br>`;
+    html += `Bounds Size: ${s3.boundsWidth} × ${s3.boundsHeight} px (${s3.boundsAspectRatio.toFixed(3)} aspect)<br>`;
+    html += `Area Retained: ${s3.retainedPercentOfOriginal}%<br>`;
+    html += `Transparency Detected: ${s3.transparencyDetected ? '✅ YES' : '❌ NO'}<br>`;
+    html += `Fallback to Full Image: ${s3.fallbackToFullImage ? '⚠️ YES' : 'NO'}<br>`;
+    if (s3.fallbackToFullImage) {
+      html += `<span style="color:#ffaa00">Reason: ${s3.fallbackReason}</span><br>`;
+    }
+    html += '</div>';
+  }
+
+  // Stage 4
+  if (_psImageDebug.stages.stage4_cropped) {
+    const s4 = _psImageDebug.stages.stage4_cropped;
+    html += '<div style="background:#0a0a0a;padding:10px;margin:10px 0;border-left:3px solid #ffaa00">';
+    html += '<strong>✂️ STAGE 4: CROPPED CUTOUT</strong><br>';
+    html += `Output Size: ${s4.outputWidth} × ${s4.outputHeight} px<br>`;
+    html += `Crop Position: [${s4.cropStartX}, ${s4.cropStartY}]<br>`;
+    html += `Padding Applied: ${s4.paddingApplied}px<br>`;
+    html += `Transparency Preserved: ${s4.transparencyPreserved ? '✅ YES' : '❌ NO'}<br>`;
+    html += '</div>';
+  }
+
+  // Stage 5
+  if (_psImageDebug.stages.stage5_canvas) {
+    const s5 = _psImageDebug.stages.stage5_canvas;
+    html += '<div style="background:#0a0a0a;padding:10px;margin:10px 0;border-left:3px solid #ffaa00">';
+    html += '<strong>🎨 STAGE 5: CANVAS COMPOSITION</strong><br>';
+    html += `Canvas: ${s5.canvasWidth} × ${s5.canvasHeight} px<br>`;
+    html += `Object Original: ${s5.objectOriginalWidth} × ${s5.objectOriginalHeight} px<br>`;
+    html += `Scale Factor: ${s5.scaleFactor !== undefined ? s5.scaleFactor.toFixed(3) : 'N/A'}<br>`;
+    html += `Position: [${s5.positionX.toFixed(1)}, ${s5.positionY.toFixed(1)}]<br>`;
+    html += `Clipping: ${s5.clippingDetected ? '⚠️ YES' : 'NO'}<br>`;
+    html += `Output Format: ${s5.outputFormat} (quality: ${s5.jpegQuality})<br>`;
+    html += '</div>';
+  }
+
+  if (_psImageDebug.errors.length > 0) {
+    html += '<div style="background:#440000;padding:10px;margin:10px 0;border-left:3px solid #ff0000">';
+    html += '<strong style="color:#ff6666">⚠️ ERRORS</strong><br>';
+    _psImageDebug.errors.forEach(err => html += `• ${err}<br>`);
+    html += '</div>';
+  }
+
+  html += '</div></div>';
+
+  const panel = document.createElement('div');
+  panel.innerHTML = html;
+  document.body.appendChild(panel);
+}
+
+// Show debug data in console
+function _psLogImageDebugData() {
+  if (!_psImageDebug.enabled) {
+    console.log('Debug mode not enabled. Use ?imageDebug=1');
+    return;
+  }
+  console.table(_psImageDebug.stages);
+}
+
 // Show the loading spinner INSIDE resBody (scr-res stays the visible screen the whole time —
 // no more jumping to a separate loading screen). Also brings us back from scr-cam if we were scanning.
 function showLoadingInline(initialMsg){
@@ -2305,6 +2573,19 @@ async function clRemoveBackground(file, onStatus){
   perfMarks.compressEnd = performance.now();
   console.log('[PERF][PHOTO] initial-compress: ' + Math.round(perfMarks.compressEnd - perfMarks.compressStart) + ' ms');
 
+  // 🔍 DIAGNOSTIC: Capture Stage 1 - Original source metadata
+  if (_psImageDebug.enabled) {
+    const reader = new FileReader();
+    const origImg = new Image();
+    reader.onload = function(e) {
+      origImg.onload = function() {
+        _psDebugStage1Original(file, this.naturalWidth, this.naturalHeight, file.type);
+      };
+      origImg.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
   if(onStatus) onStatus('🚂 Quitando fondo...');
   perfMarks.rbgReqStart = performance.now();
   const RAILWAY_RBG = 'https://savvy-rembg-production.up.railway.app/remove-bg';
@@ -2332,6 +2613,44 @@ async function clRemoveBackground(file, onStatus){
 
   const isJpeg = (rbgData.mime === 'image/jpeg') || (rbgData.format === 'jpeg');
   const pngUrl = 'data:' + (isJpeg ? 'image/jpeg' : 'image/png') + ';base64,' + rbgData.image;
+
+  // 🔍 DIAGNOSTIC: Capture Stage 2 - rembg response and alpha analysis
+  if (_psImageDebug.enabled) {
+    try {
+      const rembgImg = new Image();
+      rembgImg.onload = function() {
+        // Analyze alpha channel
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = this.width;
+        tempCanvas.height = this.height;
+        const ctx = tempCanvas.getContext('2d');
+        ctx.drawImage(this, 0, 0);
+        const imgData = ctx.getImageData(0, 0, this.width, this.height);
+        const data = imgData.data;
+
+        let alphaMin = 255, alphaMax = 0, transparentCount = 0;
+        for (let i = 3; i < data.length; i += 4) {
+          const alpha = data[i];
+          alphaMin = Math.min(alphaMin, alpha);
+          alphaMax = Math.max(alphaMax, alpha);
+          if (alpha < 255) transparentCount++;
+        }
+
+        const totalPixels = (this.width * this.height);
+        const alphaStats = {
+          alphaMin: alphaMin,
+          alphaMax: alphaMax,
+          transparentPercent: ((transparentCount / totalPixels) * 100).toFixed(1),
+          translucentCount: transparentCount
+        };
+
+        _psDebugStage2Rembg(rbgRes, null, this.width, this.height, true, alphaStats);
+      };
+      rembgImg.src = pngUrl;
+    } catch(e) {
+      _psImageDebug.errors.push('Stage 2 alpha analysis error: ' + e.message);
+    }
+  }
 
   // ── PNG format with alpha channel preserved ──
   // Requesting PNG format from background-removal API preserves transparency (alpha channel).
@@ -2775,6 +3094,9 @@ function psGetVisibleImageBounds(img){
 
     visibleBoundsCache = bounds;
     visibleBoundsCacheKey = img.src;
+
+    // 🔍 DIAGNOSTIC: Capture Stage 3 - Visible bounds detection
+    _psDebugStage3Bounds(img, bounds);
 
     return bounds;
   } catch (error) {
@@ -3397,6 +3719,28 @@ function psGeneratePackImage(img, count){
     perfMarks.jpegEnd = performance.now();
     console.log('[PERF][PACK ' + count + '] jpeg: ' + Math.round(perfMarks.jpegEnd - perfMarks.jpegStart) + ' ms');
 
+    // 🔍 DIAGNOSTIC: Capture Stage 4 & 5 - Cropped cutout and canvas composition
+    if (_psImageDebug.enabled) {
+      try {
+        // Stage 4: Cropped cutout info
+        const cropWidth = visibleBounds.width;
+        const cropHeight = visibleBounds.height;
+        _psDebugStage4CroppedCutout(cropWidth, cropHeight, visibleBounds.left, visibleBounds.top,
+                                     (visibleBounds.padding?.leftPct || 0), visibleBounds.hasTransparency);
+
+        // Stage 5: Canvas composition info
+        if (positions && positions.length > 0) {
+          const firstPos = positions[0];
+          const scaleX = firstPos.w / visibleBounds.width;
+          const scaleY = firstPos.h / visibleBounds.height;
+          _psDebugStage5Canvas(sz, sz, visibleBounds.width, visibleBounds.height,
+                              scaleX, scaleY, firstPos.x, firstPos.y, false, 'JPEG', 0.92);
+        }
+      } catch(e) {
+        _psImageDebug.errors.push('Stage 4-5 diagnostic error: ' + e.message);
+      }
+    }
+
     console.log('🎨 psGeneratePackImage complete for count=' + count);
     const totalCanvasTime = performance.now() - perfStart;
     console.log('[PERF][PACK ' + count + '] canvas-total: ' + Math.round(totalCanvasTime) + ' ms');
@@ -3416,7 +3760,21 @@ function psGenerateSingleImage(img){
   const a=img.width/img.height, pd=sz*.02, mw=sz-pd*2, mh=sz-pd*2;
   let w,h; if(a>1){w=mw;h=mw/a;} else {h=mh;w=mh*a;}
   if(w>mw){w=mw;h=w/a;} if(h>mh){h=mh;w=h*a;}
-  cx.drawImage(img, (sz-w)/2, (sz-h)/2, w, h);
+  const posX = (sz-w)/2;
+  const posY = (sz-h)/2;
+  cx.drawImage(img, posX, posY, w, h);
+
+  // 🔍 DIAGNOSTIC: Capture Stage 5 - Canvas composition for single image
+  if (_psImageDebug.enabled) {
+    try {
+      const scaleX = w / img.width;
+      const scaleY = h / img.height;
+      _psDebugStage5Canvas(sz, sz, img.width, img.height, scaleX, scaleY, posX + w/2, posY + h/2, false, 'JPEG', 0.92);
+    } catch(e) {
+      _psImageDebug.errors.push('Single image diagnostic error: ' + e.message);
+    }
+  }
+
   return cv.toDataURL('image/jpeg', .92);
 }
 
@@ -10308,6 +10666,13 @@ function renderResult(r){
         ? 'FRONT se multiplica según el paquete + distintivo azul (excepto pack de 1). BACK queda igual, compartida en todos los paquetes.'
         : '⚠️ Primero toma las fotos FRONT y BACK de arriba.'}
     </div>
+    <div id="ps-image-debug-notice" style="display:none;background:#ffaa00;color:#000;padding:10px;border-radius:8px;margin-bottom:10px;font-size:12px;font-weight:700">
+      🔍 IMAGE DEBUG MODE ACTIVE (?imageDebug=1)
+    </div>
+    <button id="ps-show-image-debug-btn" onclick="_psShowImageDebugPanel()"
+      style="display:none;width:100%;background:#ff9800;border:none;border-radius:8px;padding:10px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;margin-bottom:8px">
+      📊 Show Image Pipeline Debug Data
+    </button>
     <button id="ps-gen-packs-btn"
       onclick="window._psDebug('onclick disparado');psGenerateAllPacks()"
       ontouchend="event.preventDefault();window._psDebug('ontouchend disparado');psGenerateAllPacks()"
@@ -12583,6 +12948,17 @@ document.addEventListener('DOMContentLoaded',()=>{
     const fabN = document.getElementById('cl-fab-n');
     if (fabN && sess.length > 0) fabN.textContent = sess.length;
   }, 500);
+
+  // 🔍 Initialize image debug UI if debug mode is enabled
+  if (_psImageDebug.enabled) {
+    const debugNotice = document.getElementById('ps-image-debug-notice');
+    const debugBtn = document.getElementById('ps-show-image-debug-btn');
+    if (debugNotice) debugNotice.style.display = 'block';
+    if (debugBtn) debugBtn.style.display = 'block';
+    console.log('✅ Image Pipeline Debug Mode ENABLED (?imageDebug=1)');
+    console.log('📊 Debug data will be captured at each image processing stage');
+    console.log('Click "Show Image Pipeline Debug Data" button to view diagnostics');
+  }
 });
 
 function clShowSession() {
